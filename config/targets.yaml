@@ -1,0 +1,21 @@
+station_id: 4924
+latitude: 51.078029
+longitude: 17.037027
+elevation_m: 139
+
+# How far ahead the daily cron plans observations.
+lookahead_hours: 24
+
+# Ignore passes whose peak elevation is below this value (degrees).
+min_elevation_deg: 25
+
+targets:
+  - name: meteor_m2_3
+    norad_cat_id: 57166
+    transmitter_uuid: Qc2PqaS7n9WYtne3U9EmKJ
+    transmitter_label: "LRPT IQ recording usage @ 137.9 MHz FSK"
+
+  - name: meteor_m2_4
+    norad_cat_id: 59051
+    transmitter_uuid: dP82t5VrQC6hQDC39wxPo8
+    transmitter_label: "LRPT IQ recording usage @ 137.9 MHz FSK"

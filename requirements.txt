@@ -1,0 +1,5 @@
+requests>=2.31.0
+PyYAML>=6.0.1
+skyfield>=1.49
+pytest>=8.0.0
+responses>=0.25.0
