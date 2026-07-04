@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 from datetime import UTC, date, datetime, timedelta
+import os
 import re
 import subprocess
 import sys
@@ -22,6 +23,8 @@ PIPELINE_ID = "meteor_m2-x_lrpt"
 SATDUMP_TIMEOUT_SEC = 240
 DEFAULT_STATION_ID = 4924
 DECODE_MARKER = "decode.ok"
+UPLOAD_MARKER = "upload.ok"
+NETWORK_API_BASE = "https://network.satnogs.org/api"
 NORAD_TO_LABEL = {
     57166: "METEOR-M2-3",
     59051: "METEOR-M2-4",
@@ -106,13 +109,19 @@ def _timestamp_to_datetime_utc(timestamp: str) -> datetime:
     return datetime.strptime(timestamp, "%Y-%m-%dT%H-%M-%S").replace(tzinfo=UTC)
 
 
-def detect_satellite_label(*, timestamp_utc: datetime, station_id: int) -> str:
+def _find_matching_observation(
+    *,
+    timestamp_utc: datetime,
+    station_id: int,
+    session: requests.Session,
+) -> tuple[int | None, int | None]:
     target_day = timestamp_utc.date()
     try:
         best_match: tuple[float, int] | None = None
+        best_obs_id: int | None = None
         for norad in NORAD_TO_LABEL:
-            response = requests.get(
-                "https://network.satnogs.org/api/observations/",
+            response = session.get(
+                f"{NETWORK_API_BASE}/observations/",
                 params={
                     "ground_station": station_id,
                     "norad_cat_id": norad,
@@ -131,11 +140,18 @@ def detect_satellite_label(*, timestamp_utc: datetime, station_id: int) -> str:
                     continue
                 if best_match is None or delta_sec < best_match[0]:
                     best_match = (delta_sec, norad)
-        if best_match is not None:
-            return NORAD_TO_LABEL[best_match[1]]
+                    best_obs_id = int(item["id"])
+        if best_match is not None and best_obs_id is not None:
+            return best_match[1], best_obs_id
     except (requests.RequestException, ValueError, KeyError):
         pass
-    return "METEOR-M2-x"
+    return None, None
+
+
+def detect_satellite_label(norad_id: int | None) -> str:
+    if norad_id is None:
+        return "METEOR-M2-x"
+    return NORAD_TO_LABEL.get(norad_id, "METEOR-M2-x")
 
 
 def output_dir_for_iq_name(iq_name: str, *, satellite_label: str) -> Path:
@@ -186,6 +202,62 @@ def write_decode_marker(output_dir: Path, *, iq_name: str, host_raw: Path) -> No
     )
 
 
+def upload_marker_path(output_dir: Path) -> Path:
+    return output_dir / UPLOAD_MARKER
+
+
+def is_already_uploaded(output_dir: Path) -> bool:
+    return upload_marker_path(output_dir).exists()
+
+
+def write_upload_marker(output_dir: Path, *, observation_id: int, image_path: Path) -> None:
+    marker = upload_marker_path(output_dir)
+    marker.write_text(
+        "\n".join(
+            [
+                f"uploaded_at={datetime.now(UTC).isoformat().replace('+00:00', 'Z')}",
+                f"observation_id={observation_id}",
+                f"image={image_path}",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def choose_upload_image(output_dir: Path) -> Path | None:
+    preferred = output_dir / "MSU-MR" / "msu_mr_AVHRR_3a21_False_Color_(uncalibrated).png"
+    if preferred.exists() and preferred.stat().st_size > 0:
+        return preferred
+    fallback = sorted((output_dir / "MSU-MR").glob("*.png"))
+    for candidate in fallback:
+        if candidate.stat().st_size > 0:
+            return candidate
+    return None
+
+
+def upload_demoddata(
+    *,
+    observation_id: int,
+    image_path: Path,
+    api_token: str,
+    session: requests.Session,
+) -> bool:
+    url = f"{NETWORK_API_BASE}/observations/{observation_id}/"
+    headers = {"Authorization": f"Token {api_token}"}
+    with image_path.open("rb") as image_file:
+        response = session.put(
+            url,
+            headers=headers,
+            files={"demoddata": image_file},
+            timeout=30,
+        )
+    if response.status_code == 403 and "has already been uploaded" in response.text:
+        return True
+    response.raise_for_status()
+    return True
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
@@ -219,6 +291,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Re-decode even if decode.ok already exists.",
     )
     parser.add_argument(
+        "--upload-data",
+        action="store_true",
+        help="Upload decoded color image as demoddata to SatNOGS observation Data tab.",
+    )
+    parser.add_argument(
+        "--api-token",
+        help="SatNOGS API token for upload. If omitted, SATNOGS_API_TOKEN env var is used.",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Print selected files and output paths without copying/decoding.",
@@ -243,41 +324,85 @@ def main(argv: list[str] | None = None) -> int:
         failures = 0
         decoded = 0
         skipped = 0
+        uploaded = 0
+        upload_skipped = 0
+
+        api_token = args.api_token or os.environ.get("SATNOGS_API_TOKEN")
+        if args.upload_data and not api_token:
+            raise ValueError("--upload-data requires SATNOGS_API_TOKEN env var or --api-token.")
 
         print(f"Target day (UTC): {target_day.isoformat()}")
         print(f"Found IQ files: {len(iq_files)}")
 
+        session = requests.Session()
         for iq_name in iq_files:
             timestamp = _extract_timestamp(iq_name)
             ts_utc = _timestamp_to_datetime_utc(timestamp)
-            satellite_label = detect_satellite_label(timestamp_utc=ts_utc, station_id=args.station_id)
+            norad_id, observation_id = _find_matching_observation(
+                timestamp_utc=ts_utc,
+                station_id=args.station_id,
+                session=session,
+            )
+            satellite_label = detect_satellite_label(norad_id)
             out_dir = output_dir_for_iq_name(iq_name, satellite_label=satellite_label)
 
             print(f"\nIQ file: {iq_name}")
             print(f"Satellite: {satellite_label}")
+            if observation_id:
+                print(f"Observation ID: {observation_id}")
             print(f"Output directory: {out_dir}")
 
-            if is_already_decoded(out_dir) and not args.force:
-                print("Skip: decode.ok exists.")
+            decode_done = is_already_decoded(out_dir) and not args.force
+            if decode_done:
+                print("Skip decode: decode.ok exists.")
                 skipped += 1
-                continue
+            elif not args.dry_run:
+                try:
+                    host_raw = copy_iq_to_host(iq_name)
+                    print(f"Copied to host: {host_raw}")
+                    run_satdump(host_raw, out_dir)
+                    write_decode_marker(out_dir, iq_name=iq_name, host_raw=host_raw)
+                    print(f"Decode finished. Images in: {out_dir / 'MSU-MR'}")
+                    decoded += 1
+                except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+                    print(f"Decode failed for {iq_name}: {exc}", file=sys.stderr)
+                    failures += 1
+                    continue
 
-            if args.dry_run:
-                continue
-
-            try:
-                host_raw = copy_iq_to_host(iq_name)
-                print(f"Copied to host: {host_raw}")
-                run_satdump(host_raw, out_dir)
-                write_decode_marker(out_dir, iq_name=iq_name, host_raw=host_raw)
-                print(f"Decode finished. Images in: {out_dir / 'MSU-MR'}")
-                decoded += 1
-            except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
-                print(f"Decode failed for {iq_name}: {exc}", file=sys.stderr)
-                failures += 1
+            if args.upload_data:
+                if not observation_id:
+                    print("Skip upload: no matching observation ID found.")
+                    upload_skipped += 1
+                    continue
+                if is_already_uploaded(out_dir):
+                    print("Skip upload: upload.ok exists.")
+                    upload_skipped += 1
+                    continue
+                image_path = choose_upload_image(out_dir)
+                if image_path is None:
+                    print("Skip upload: no decoded PNG found.")
+                    upload_skipped += 1
+                    continue
+                if args.dry_run:
+                    print(f"Dry-run upload: would send {image_path.name} to observation {observation_id}.")
+                    continue
+                try:
+                    upload_demoddata(
+                        observation_id=observation_id,
+                        image_path=image_path,
+                        api_token=api_token,
+                        session=session,
+                    )
+                    write_upload_marker(out_dir, observation_id=observation_id, image_path=image_path)
+                    print(f"Upload finished: {image_path.name} -> observation {observation_id} Data tab.")
+                    uploaded += 1
+                except requests.RequestException as exc:
+                    print(f"Upload failed for {iq_name}: {exc}", file=sys.stderr)
+                    failures += 1
 
         print(
-            f"\nSummary: decoded={decoded}, skipped={skipped}, failures={failures}, "
+            f"\nSummary: decoded={decoded}, decode_skipped={skipped}, "
+            f"uploaded={uploaded}, upload_skipped={upload_skipped}, failures={failures}, "
             f"total={len(iq_files)}"
         )
         return 1 if failures else 0
