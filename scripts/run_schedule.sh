@@ -11,4 +11,4 @@ if [[ -f "$ROOT/.env" ]]; then
   set +a
 fi
 
-PYTHONPATH="$ROOT/src" python3 -m satnogs_pipeline "$@"
+PYTHONPATH="$ROOT/src" "$ROOT/.venv/bin/python" -m satnogs_pipeline "$@"
