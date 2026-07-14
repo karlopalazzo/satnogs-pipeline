@@ -91,6 +91,21 @@ def test_plan_observations_skips_existing_future_pass(monkeypatch) -> None:
                     "ground_station": "4924",
                     "status": "future",
                     "limit": "100",
+                    "norad_cat_id": "40069",
+                }
+            )
+        ],
+    )
+    responses.add(
+        responses.GET,
+        "https://network.satnogs.org/api/observations/",
+        json=[],
+        match=[
+            responses.matchers.query_param_matcher(
+                {
+                    "ground_station": "4924",
+                    "status": "future",
+                    "limit": "100",
                     "norad_cat_id": "59051",
                 }
             )

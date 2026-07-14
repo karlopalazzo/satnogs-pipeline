@@ -26,6 +26,7 @@ DECODE_MARKER = "decode.ok"
 UPLOAD_MARKER = "upload.ok"
 NETWORK_API_BASE = "https://network.satnogs.org/api"
 NORAD_TO_LABEL = {
+    40069: "METEOR-M-2",
     57166: "METEOR-M2-3",
     59051: "METEOR-M2-4",
 }

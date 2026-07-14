@@ -10,6 +10,11 @@ lookahead_hours: 24
 min_elevation_deg: 25
 
 targets:
+  - name: meteor_m2
+    norad_cat_id: 40069
+    transmitter_uuid: CojkGDaq3u42nRdLdfczng
+    transmitter_label: "LRPT 1 @ 137.1 MHz"
+
   - name: meteor_m2_3
     norad_cat_id: 57166
     transmitter_uuid: Qc2PqaS7n9WYtne3U9EmKJ
