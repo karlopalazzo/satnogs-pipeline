@@ -21,6 +21,7 @@ SATDUMP_SAMPLERATE = "160000"
 SATDUMP_BASEBAND_FORMAT = "cs16"
 PIPELINE_ID = "meteor_m2-x_lrpt"
 SATDUMP_TIMEOUT_SEC = 240
+UPLOAD_TIMEOUT_SEC = 180
 DEFAULT_STATION_ID = 4924
 DECODE_MARKER = "decode.ok"
 UPLOAD_MARKER = "upload.ok"
@@ -81,9 +82,11 @@ def choose_iq_filenames(
 
 def copy_iq_to_host(iq_name: str) -> Path:
     HOST_RAW_DIR.mkdir(parents=True, exist_ok=True)
-    source_in_container = f"{CONTAINER_IQ_DIR}/{iq_name}"
     destination_on_host = HOST_RAW_DIR / iq_name
+    if destination_on_host.exists() and destination_on_host.stat().st_size > 0:
+        return destination_on_host
 
+    source_in_container = f"{CONTAINER_IQ_DIR}/{iq_name}"
     cmd = [
         "sudo",
         "docker",
@@ -251,7 +254,7 @@ def upload_demoddata(
             url,
             headers=headers,
             files={"demoddata": image_file},
-            timeout=30,
+            timeout=UPLOAD_TIMEOUT_SEC,
         )
     if response.status_code == 403 and "has already been uploaded" in response.text:
         return True

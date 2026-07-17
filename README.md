@@ -158,7 +158,7 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 10 0 * * * cd "/home/palac/satnogs-pipeline" && mkdir -p logs && ./scripts/update_repo.sh >> logs/cron_update.log 2>&1 && ./scripts/run_schedule.sh >> logs/cron_schedule.log 2>&1
 
 # Decode + upload IQ dumps from previous UTC day
-40 0 * * * cd "/home/palac/satnogs-pipeline" && mkdir -p logs && ./scripts/update_repo.sh >> logs/cron_update.log 2>&1 && set -a && source ./.env && set +a && ./.venv/bin/python scripts/decode_meteor.py --upload-data --date "$(date -u -d 'yesterday' +\%F)" >> logs/cron_decode.log 2>&1
+40 0 * * * cd "/home/palac/satnogs-pipeline" && mkdir -p logs && (./scripts/update_repo.sh >> logs/cron_update.log 2>&1 || true) && set -a && source ./.env && set +a && ./.venv/bin/python scripts/decode_meteor.py --upload-data --date "$(date -u -d 'yesterday' +\%F)" >> logs/cron_decode.log 2>&1
 
 # Cleanup old IQ files in SatNOGS client container
 55 0 * * * cd "/home/palac/satnogs-pipeline" && mkdir -p logs && sudo docker exec satnogs_satnogs-client sh -lc 'find /tmp/.satnogs/data -type f -mtime +1 -delete; df -h /tmp' >> logs/cron_cleanup.log 2>&1
