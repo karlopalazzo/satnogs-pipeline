@@ -53,10 +53,11 @@ def main(argv: list[str] | None = None) -> int:
             f"{start} -> {end} | {item.reason}"
         )
 
-    scheduled = sum(1 for item in results if item.action == "schedule")
+    scheduled = sum(1 for item in results if item.action == "scheduled")
+    failed = sum(1 for item in results if item.action == "failed")
     skipped = sum(1 for item in results if item.action == "skip")
-    print(f"\nSummary: {scheduled} to schedule, {skipped} skipped")
-    return 0
+    print(f"\nSummary: {scheduled} scheduled, {skipped} skipped, {failed} failed")
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":

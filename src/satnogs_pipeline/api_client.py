@@ -57,14 +57,17 @@ class SatnogsNetworkClient:
         start: datetime,
         end: datetime,
     ) -> ScheduledObservation:
-        body = {
-            "ground_station": station_id,
-            "transmitter": transmitter_uuid,
-            "start": _format_utc(start),
-            "end": _format_utc(end),
-        }
+        body = [
+            {
+                "ground_station": station_id,
+                "transmitter_uuid": transmitter_uuid,
+                "start": _format_schedule_datetime(start),
+                "end": _format_schedule_datetime(end),
+            }
+        ]
         payload = self._post(f"{NETWORK_API}/observations/", json=body)
-        return self._parse_observation(payload)
+        items = payload if isinstance(payload, list) else [payload]
+        return self._parse_observation(items[0])
 
     def _get(self, url: str, params: dict[str, Any] | None = None) -> Any:
         response = self._session.get(url, params=params, timeout=30)
@@ -135,3 +138,7 @@ def _parse_utc(value: str) -> datetime:
 
 def _format_utc(value: datetime) -> str:
     return value.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _format_schedule_datetime(value: datetime) -> str:
+    return value.astimezone(timezone.utc).replace(microsecond=0).strftime("%Y-%m-%d %H:%M:%S")

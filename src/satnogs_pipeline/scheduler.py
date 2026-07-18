@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
+import requests
+
 from satnogs_pipeline.api_client import SatnogsNetworkClient, ScheduledObservation, fetch_tle
 from satnogs_pipeline.config import PipelineConfig, Target
 from satnogs_pipeline.passes import PassWindow, default_planning_window, predict_passes
@@ -17,6 +19,9 @@ class PlannedObservation:
     action: str
     reason: str
     existing_observation_id: int | None = None
+
+
+MIN_OBSERVATION_DURATION = timedelta(seconds=180)
 
 
 def plan_observations(
@@ -54,6 +59,17 @@ def plan_observations(
         )
 
         for pass_window in passes:
+            if pass_window.end - pass_window.start < MIN_OBSERVATION_DURATION:
+                planned.append(
+                    PlannedObservation(
+                        target=target,
+                        pass_window=pass_window,
+                        action="skip",
+                        reason="pass shorter than 180s SatNOGS minimum",
+                    )
+                )
+                continue
+
             overlap = _find_overlap(existing, pass_window)
             if overlap is not None:
                 planned.append(
@@ -99,12 +115,24 @@ def apply_plan(
             results.append(item)
             continue
 
-        created = client.schedule_observation(
-            station_id=config.station_id,
-            transmitter_uuid=item.target.transmitter_uuid,
-            start=item.pass_window.start,
-            end=item.pass_window.end,
-        )
+        try:
+            created = client.schedule_observation(
+                station_id=config.station_id,
+                transmitter_uuid=item.target.transmitter_uuid,
+                start=item.pass_window.start,
+                end=item.pass_window.end,
+            )
+        except requests.HTTPError as exc:
+            results.append(
+                PlannedObservation(
+                    target=item.target,
+                    pass_window=item.pass_window,
+                    action="failed",
+                    reason=f"schedule request failed: {exc}",
+                )
+            )
+            continue
+
         results.append(
             PlannedObservation(
                 target=item.target,
