@@ -5,9 +5,12 @@ import argparse
 from datetime import UTC, date, datetime, timedelta
 import os
 import re
+import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
+from typing import Callable, TypeVar
 
 import requests
 
@@ -22,7 +25,12 @@ SATDUMP_BASEBAND_FORMAT = "cs16"
 PIPELINE_ID = "meteor_m2-x_lrpt"
 SATDUMP_TIMEOUT_SEC = 240
 UPLOAD_TIMEOUT_SEC = 180
+API_RETRY_ATTEMPTS = 5
+API_RETRY_BASE_DELAY_SEC = 3
 DEFAULT_STATION_ID = 4924
+IQ_ARCHIVE_DIR = Path(
+    "/var/lib/docker-bindmounts/satnogs_satnogs-client/opt/satnogs-non-free/iq-archive"
+)
 DECODE_MARKER = "decode.ok"
 UPLOAD_MARKER = "upload.ok"
 NETWORK_API_BASE = "https://network.satnogs.org/api"
@@ -33,6 +41,34 @@ NORAD_TO_LABEL = {
 }
 
 IQ_NAME_RE = re.compile(r"^iq_cs16_(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2})\.raw$")
+
+T = TypeVar("T")
+
+
+def _with_retries(
+    action: Callable[[], T],
+    *,
+    description: str,
+    attempts: int = API_RETRY_ATTEMPTS,
+    base_delay_sec: int = API_RETRY_BASE_DELAY_SEC,
+) -> T:
+    last_error: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            return action()
+        except (requests.RequestException, ValueError, KeyError) as exc:
+            last_error = exc
+            if attempt >= attempts:
+                break
+            delay_sec = base_delay_sec * attempt
+            print(
+                f"{description} failed (attempt {attempt}/{attempts}): {exc}; "
+                f"retrying in {delay_sec}s",
+                file=sys.stderr,
+            )
+            time.sleep(delay_sec)
+    assert last_error is not None
+    raise last_error
 
 
 def _run(cmd: list[str], *, capture_output: bool = False) -> subprocess.CompletedProcess[str]:
@@ -63,6 +99,16 @@ def list_iq_files_in_container(*, day: date | None = None) -> list[str]:
     return [Path(item).name for item in files]
 
 
+def list_iq_files_on_host(*, day: date) -> list[str]:
+    pattern = f"iq_cs16_{day.isoformat()}T*.raw"
+    files: list[str] = []
+    for directory in (HOST_RAW_DIR, IQ_ARCHIVE_DIR):
+        if not directory.exists():
+            continue
+        files.extend(path.name for path in directory.glob(pattern))
+    return sorted(set(files))
+
+
 def choose_iq_filenames(
     explicit_name: str | None,
     *,
@@ -73,17 +119,24 @@ def choose_iq_filenames(
             raise ValueError(f"Invalid IQ filename format: {explicit_name}")
         return [explicit_name]
 
-    files = list_iq_files_in_container(day=day)
+    files = sorted(
+        set(list_iq_files_in_container(day=day)) | set(list_iq_files_on_host(day=day))
+    )
     if not files:
-        raise RuntimeError(f"No iq_cs16_*.raw files found in container for {day.isoformat()}.")
-    # Decode oldest -> newest for easier chronological tracing.
-    return sorted(files)
+        raise RuntimeError(f"No iq_cs16_*.raw files found for {day.isoformat()}.")
+    return files
 
 
 def copy_iq_to_host(iq_name: str) -> Path:
     HOST_RAW_DIR.mkdir(parents=True, exist_ok=True)
     destination_on_host = HOST_RAW_DIR / iq_name
     if destination_on_host.exists() and destination_on_host.stat().st_size > 0:
+        return destination_on_host
+
+    archive_source = IQ_ARCHIVE_DIR / iq_name
+    if archive_source.exists() and archive_source.stat().st_size > 0:
+        shutil.copy2(archive_source, destination_on_host)
+        print(f"Restored from IQ archive: {archive_source}")
         return destination_on_host
 
     source_in_container = f"{CONTAINER_IQ_DIR}/{iq_name}"
@@ -120,7 +173,8 @@ def _find_matching_observation(
     session: requests.Session,
 ) -> tuple[int | None, int | None]:
     target_day = timestamp_utc.date()
-    try:
+
+    def lookup() -> tuple[int | None, int | None]:
         best_match: tuple[float, int] | None = None
         best_obs_id: int | None = None
         for norad in NORAD_TO_LABEL:
@@ -134,7 +188,9 @@ def _find_matching_observation(
                 timeout=20,
             )
             response.raise_for_status()
-            for item in response.json():
+            payload = response.json()
+            items = payload if isinstance(payload, list) else payload.get("results", [])
+            for item in items:
                 obs_start = datetime.fromisoformat(item["start"].replace("Z", "+00:00"))
                 if obs_start.date() != target_day:
                     continue
@@ -147,9 +203,16 @@ def _find_matching_observation(
                     best_obs_id = int(item["id"])
         if best_match is not None and best_obs_id is not None:
             return best_match[1], best_obs_id
-    except (requests.RequestException, ValueError, KeyError):
-        pass
-    return None, None
+        return None, None
+
+    try:
+        return _with_retries(
+            lookup,
+            description=f"Observation lookup for {timestamp_utc.isoformat()}",
+        )
+    except (requests.RequestException, ValueError, KeyError) as exc:
+        print(f"Observation lookup failed after retries: {exc}", file=sys.stderr)
+        return None, None
 
 
 def detect_satellite_label(norad_id: int | None) -> str:
@@ -164,6 +227,16 @@ def output_dir_for_iq_name(iq_name: str, *, satellite_label: str) -> Path:
     out_dir = HOST_OUTPUT_DIR / satellite_label / day / timestamp
     out_dir.mkdir(parents=True, exist_ok=True)
     return out_dir
+
+
+def find_existing_output_dir(iq_name: str) -> Path | None:
+    timestamp = _extract_timestamp(iq_name)
+    day = timestamp.split("T", 1)[0]
+    candidates = sorted(HOST_OUTPUT_DIR.glob(f"*/{day}/{timestamp}"))
+    for candidate in candidates:
+        if is_already_decoded(candidate):
+            return candidate
+    return candidates[0] if candidates else None
 
 
 def run_satdump(input_raw: Path, output_dir: Path) -> None:
@@ -249,17 +322,24 @@ def upload_demoddata(
 ) -> bool:
     url = f"{NETWORK_API_BASE}/observations/{observation_id}/"
     headers = {"Authorization": f"Token {api_token}"}
-    with image_path.open("rb") as image_file:
-        response = session.put(
-            url,
-            headers=headers,
-            files={"demoddata": image_file},
-            timeout=UPLOAD_TIMEOUT_SEC,
-        )
-    if response.status_code == 403 and "has already been uploaded" in response.text:
+
+    def send() -> bool:
+        with image_path.open("rb") as image_file:
+            response = session.put(
+                url,
+                headers=headers,
+                files={"demoddata": image_file},
+                timeout=UPLOAD_TIMEOUT_SEC,
+            )
+        if response.status_code == 403 and "has already been uploaded" in response.text:
+            return True
+        response.raise_for_status()
         return True
-    response.raise_for_status()
-    return True
+
+    return _with_retries(
+        send,
+        description=f"Upload demoddata to observation {observation_id}",
+    )
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -349,6 +429,10 @@ def main(argv: list[str] | None = None) -> int:
             )
             satellite_label = detect_satellite_label(norad_id)
             out_dir = output_dir_for_iq_name(iq_name, satellite_label=satellite_label)
+            existing_out_dir = find_existing_output_dir(iq_name)
+            if existing_out_dir is not None and existing_out_dir != out_dir:
+                print(f"Using existing output directory: {existing_out_dir}")
+                out_dir = existing_out_dir
 
             print(f"\nIQ file: {iq_name}")
             print(f"Satellite: {satellite_label}")

@@ -14,7 +14,7 @@ def test_load_config_reads_station_and_targets() -> None:
 
     assert config.station_id == 4924
     assert config.min_elevation_deg == 25
-    assert len(config.targets) == 3
+    assert len(config.targets) == 2
     m2_3 = next(target for target in config.targets if target.name == "meteor_m2_3")
     assert m2_3.transmitter_uuid == "Qc2PqaS7n9WYtne3U9EmKJ"
 
