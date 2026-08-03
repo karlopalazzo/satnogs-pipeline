@@ -8,7 +8,7 @@ Automated ground station pipeline for scheduling, receiving, and decoding METEOR
 - Avoids duplicate scheduling by checking already planned future observations.
 - Collects IQ dumps from the SatNOGS client container and decodes them with SatDump.
 - Uploads decoded color images to the SatNOGS observation **Data** tab.
-- Runs daily via cron on the Raspberry Pi (scheduler + decode/upload batch from the previous UTC day).
+- Runs via cron on the Raspberry Pi (daily scheduler + decode/upload twice per UTC day).
 - Validates scheduling logic in GitHub Actions with pytest.
 
 ## Architecture
@@ -52,7 +52,7 @@ flowchart LR
 | Component | Role |
 |---|---|
 | **GitHub Actions** | CI: pytest, scheduler dry-run |
-| **Raspberry Pi cron** | Daily entry point (schedule, decode, cleanup) |
+| **Raspberry Pi cron** | Schedule once daily; decode/upload every 12h UTC; cleanup daily |
 | **`run_schedule.sh`** | Fetches TLE, predicts passes (Skyfield), schedules observations |
 | **SatNOGS client (Docker)** | Executes RF observations, stores IQ dumps |
 | **`decode_meteor.py`** | Copies IQ to host, decodes with SatDump, uploads PNG |
@@ -148,23 +148,27 @@ Force re-decode even if marker exists:
 
 ## Daily Cron Automation
 
-Example crontab entries:
+Example crontab entries (`CRON_TZ=UTC` keeps “yesterday” aligned with observation days):
 
 ```cron
 SHELL=/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-# Keep schedule/decode on UTC so "yesterday" matches the observation day.
 CRON_TZ=UTC
 
 # Plan METEOR observations for next 24h (00:10 UTC)
 10 0 * * * cd "/home/palac/satnogs-pipeline" && mkdir -p logs && (./scripts/update_repo.sh >> logs/cron_update.log 2>&1 || true) && ./scripts/run_schedule.sh >> logs/cron_schedule.log 2>&1
 
-# Decode + upload IQ dumps from previous UTC day (00:40 UTC)
+# Decode + upload previous UTC day (00:40 UTC / 02:40 CEST)
 40 0 * * * cd "/home/palac/satnogs-pipeline" && mkdir -p logs && (./scripts/update_repo.sh >> logs/cron_update.log 2>&1 || true) && set -a && source ./.env && set +a && ./.venv/bin/python scripts/decode_meteor.py --upload-data --date "$(date -u -d 'yesterday' +\%F)" >> logs/cron_decode.log 2>&1
+
+# Decode + upload current UTC day so far (12:40 UTC / 14:40 CEST)
+40 12 * * * cd "/home/palac/satnogs-pipeline" && mkdir -p logs && (./scripts/update_repo.sh >> logs/cron_update.log 2>&1 || true) && set -a && source ./.env && set +a && ./.venv/bin/python scripts/decode_meteor.py --upload-data --date "$(date -u +\%F)" >> logs/cron_decode.log 2>&1
 
 # Cleanup old IQ files in SatNOGS client container
 55 0 * * * cd "/home/palac/satnogs-pipeline" && mkdir -p logs && sudo docker exec satnogs_satnogs-client sh -lc 'find /tmp/.satnogs/data -type f -mtime +1 -delete; df -h /tmp' >> logs/cron_cleanup.log 2>&1
 ```
+
+Decode jobs are idempotent (`decode.ok` / `upload.ok`), so the night run safely skips midday uploads.
 
 ## Data Paths
 
