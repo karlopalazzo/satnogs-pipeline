@@ -153,11 +153,13 @@ Example crontab entries:
 ```cron
 SHELL=/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+# Keep schedule/decode on UTC so "yesterday" matches the observation day.
+CRON_TZ=UTC
 
-# Plan METEOR observations for next 24h
+# Plan METEOR observations for next 24h (00:10 UTC)
 10 0 * * * cd "/home/palac/satnogs-pipeline" && mkdir -p logs && (./scripts/update_repo.sh >> logs/cron_update.log 2>&1 || true) && ./scripts/run_schedule.sh >> logs/cron_schedule.log 2>&1
 
-# Decode + upload IQ dumps from previous UTC day
+# Decode + upload IQ dumps from previous UTC day (00:40 UTC)
 40 0 * * * cd "/home/palac/satnogs-pipeline" && mkdir -p logs && (./scripts/update_repo.sh >> logs/cron_update.log 2>&1 || true) && set -a && source ./.env && set +a && ./.venv/bin/python scripts/decode_meteor.py --upload-data --date "$(date -u -d 'yesterday' +\%F)" >> logs/cron_decode.log 2>&1
 
 # Cleanup old IQ files in SatNOGS client container
