@@ -301,13 +301,101 @@ def write_upload_marker(output_dir: Path, *, observation_id: int, image_path: Pa
     )
 
 
+UPLOAD_COMPOSITE_221 = "upload_AVHRR_221_False_Color_(uncalibrated).png"
+UPLOAD_COMPOSITE_543B = "upload_AVHRR_543b_IR_False_Color.png"
+
+PREFERRED_UPLOAD_BASENAMES = (
+    "msu_mr_AVHRR_3a21_False_Color_(uncalibrated).png",
+    "msu_mr_AVHRR_3a21_False_Color_.png",
+    "msu_mr_MSU-MR_Day_Fire-Land_RGB.png",
+    "msu_mr_AVHRR_124_False_Color_(Cloud_RGB).png",
+    "msu_mr_MSU-MR_124_False_Color.png",
+    "msu_mr_AVHRR_221_False_Color_(uncalibrated).png",
+    "msu_mr_Natural_Color.png",
+)
+
+
+def _msu_mr_dir(output_dir: Path) -> Path:
+    return output_dir / "MSU-MR"
+
+
+def _nonempty_png(path: Path) -> bool:
+    return path.is_file() and path.stat().st_size > 0
+
+
+def _composite_rank(path: Path) -> tuple[int, str]:
+    name = path.name.lower()
+    if "false_color" in name or "cloud_rgb" in name or "fire" in name or "natural" in name:
+        return (0, name)
+    if "thermal" in name or "ir" in name:
+        return (1, name)
+    return (2, name)
+
+
+def _build_avhrr_221_composite(msu_dir: Path) -> Path | None:
+    from PIL import Image
+
+    ch1_path = msu_dir / "MSU-MR-1.png"
+    ch2_path = msu_dir / "MSU-MR-2.png"
+    if not (_nonempty_png(ch1_path) and _nonempty_png(ch2_path)):
+        return None
+
+    ch1 = Image.open(ch1_path).convert("L")
+    ch2 = Image.open(ch2_path).convert("L")
+    if ch1.size != ch2.size:
+        ch2 = ch2.resize(ch1.size, Image.Resampling.BILINEAR)
+    composite = Image.merge("RGB", (ch2, ch2, ch1))
+    out_path = msu_dir / UPLOAD_COMPOSITE_221
+    composite.save(out_path, optimize=True)
+    return out_path if _nonempty_png(out_path) else None
+
+
+def _build_avhrr_543b_composite(msu_dir: Path) -> Path | None:
+    from PIL import Image
+
+    channels: list[Image.Image] = []
+    for index in (4, 5, 6):
+        channel_path = msu_dir / f"MSU-MR-{index}.png"
+        if not _nonempty_png(channel_path):
+            return None
+        channels.append(Image.open(channel_path).convert("L"))
+
+    size = channels[0].size
+    resized = []
+    for channel in channels:
+        if channel.size != size:
+            channel = channel.resize(size, Image.Resampling.BILINEAR)
+        resized.append(Image.eval(channel, lambda value: 255 - value))
+    composite = Image.merge("RGB", tuple(resized))
+    out_path = msu_dir / UPLOAD_COMPOSITE_543B
+    composite.save(out_path, optimize=True)
+    return out_path if _nonempty_png(out_path) else None
+
+
 def choose_upload_image(output_dir: Path) -> Path | None:
-    preferred = output_dir / "MSU-MR" / "msu_mr_AVHRR_3a21_False_Color_(uncalibrated).png"
-    if preferred.exists() and preferred.stat().st_size > 0:
-        return preferred
-    fallback = sorted((output_dir / "MSU-MR").glob("*.png"))
-    for candidate in fallback:
-        if candidate.stat().st_size > 0:
+    msu_dir = _msu_mr_dir(output_dir)
+    if not msu_dir.is_dir():
+        return None
+
+    for basename in PREFERRED_UPLOAD_BASENAMES:
+        candidate = msu_dir / basename
+        if _nonempty_png(candidate):
+            return candidate
+
+    composites = sorted(
+        (path for path in msu_dir.glob("msu_mr_*.png") if _nonempty_png(path)),
+        key=_composite_rank,
+    )
+    if composites:
+        return composites[0]
+
+    for builder in (_build_avhrr_221_composite, _build_avhrr_543b_composite):
+        built = builder(msu_dir)
+        if built is not None:
+            return built
+
+    for candidate in sorted(msu_dir.glob("MSU-MR-*.png")):
+        if _nonempty_png(candidate):
             return candidate
     return None
 
