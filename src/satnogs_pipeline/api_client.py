@@ -36,11 +36,13 @@ class SatnogsNetworkClient:
         *,
         station_id: int,
         norad_cat_id: int | None = None,
+        start: datetime | None = None,
     ) -> list[ScheduledObservation]:
+        start_utc = start or datetime.now(timezone.utc)
         params: dict[str, Any] = {
             "ground_station": station_id,
             "status": "future",
-            "limit": 100,
+            "start": format_network_api_datetime(start_utc),
         }
         if norad_cat_id is not None:
             params["norad_cat_id"] = norad_cat_id
@@ -106,7 +108,7 @@ def _fetch_tle_from_satnogs_db(
 ) -> tuple[str, str, str]:
     response = session.get(
         f"{DB_API}/tle/",
-        params={"norad_cat_id": norad_cat_id, "limit": 1},
+        params={"norad_cat_id": norad_cat_id},
         timeout=30,
     )
     response.raise_for_status()
@@ -136,8 +138,12 @@ def _parse_utc(value: str) -> datetime:
     return datetime.fromisoformat(value).astimezone(timezone.utc)
 
 
-def _format_utc(value: datetime) -> str:
+def format_network_api_datetime(value: datetime) -> str:
     return value.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _format_utc(value: datetime) -> str:
+    return format_network_api_datetime(value)
 
 
 def _format_schedule_datetime(value: datetime) -> str:

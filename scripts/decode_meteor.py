@@ -14,6 +14,8 @@ from typing import Callable, TypeVar
 
 import requests
 
+from satnogs_pipeline.api_client import format_network_api_datetime
+
 CONTAINER_NAME = "satnogs_satnogs-client"
 CONTAINER_IQ_DIR = "/tmp/.satnogs/data"
 HOST_WORK_DIR = Path("/home/palac/satnogs-decode")
@@ -172,6 +174,7 @@ def _find_matching_observation(
     session: requests.Session,
 ) -> tuple[int | None, int | None]:
     target_day = timestamp_utc.date()
+    day_start = datetime.combine(target_day, datetime.min.time()).replace(tzinfo=UTC)
 
     def lookup() -> tuple[int | None, int | None]:
         best_match: tuple[float, int] | None = None
@@ -182,7 +185,7 @@ def _find_matching_observation(
                 params={
                     "ground_station": station_id,
                     "norad_cat_id": norad,
-                    "limit": 100,
+                    "start": format_network_api_datetime(day_start),
                 },
                 timeout=20,
             )

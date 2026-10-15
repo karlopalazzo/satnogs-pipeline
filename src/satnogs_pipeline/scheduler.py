@@ -43,6 +43,7 @@ def plan_observations(
             existing = client.list_future_observations(
                 station_id=config.station_id,
                 norad_cat_id=target.norad_cat_id,
+                start=window_start,
             )
 
         tle_name, line1, line2 = fetch_tle(target.norad_cat_id)

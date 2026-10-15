@@ -23,7 +23,7 @@ def test_fetch_tle_parses_satnogs_db_response() -> None:
                 "tle2": "2 57166  98.7123  45.6789 0012345 123.4567 236.7890 14.12345678901234",
             }
         ],
-        match=[responses.matchers.query_param_matcher({"norad_cat_id": "57166", "limit": "1"})],
+        match=[responses.matchers.query_param_matcher({"norad_cat_id": "57166"})],
     )
 
     name, line1, line2 = fetch_tle(57166)
@@ -75,7 +75,7 @@ def test_plan_observations_skips_existing_future_pass(monkeypatch) -> None:
                 {
                     "ground_station": "4924",
                     "status": "future",
-                    "limit": "100",
+                    "start": "2026-06-13T12:00:00Z",
                     "norad_cat_id": "57166",
                 }
             )
@@ -90,7 +90,7 @@ def test_plan_observations_skips_existing_future_pass(monkeypatch) -> None:
                 {
                     "ground_station": "4924",
                     "status": "future",
-                    "limit": "100",
+                    "start": "2026-06-13T12:00:00Z",
                     "norad_cat_id": "40069",
                 }
             )
@@ -105,7 +105,7 @@ def test_plan_observations_skips_existing_future_pass(monkeypatch) -> None:
                 {
                     "ground_station": "4924",
                     "status": "future",
-                    "limit": "100",
+                    "start": "2026-06-13T12:00:00Z",
                     "norad_cat_id": "59051",
                 }
             )
