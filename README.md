@@ -159,10 +159,10 @@ CRON_TZ=UTC
 10 0 * * * cd "/home/palac/satnogs-pipeline" && mkdir -p logs && (./scripts/update_repo.sh >> logs/cron_update.log 2>&1 || true) && ./scripts/run_schedule.sh >> logs/cron_schedule.log 2>&1
 
 # Decode + upload previous UTC day (00:40 UTC / 02:40 CEST)
-40 0 * * * cd "/home/palac/satnogs-pipeline" && mkdir -p logs && (./scripts/update_repo.sh >> logs/cron_update.log 2>&1 || true) && set -a && source ./.env && set +a && ./.venv/bin/python scripts/decode_meteor.py --upload-data --date "$(date -u -d 'yesterday' +\%F)" >> logs/cron_decode.log 2>&1
+40 0 * * * cd "/home/palac/satnogs-pipeline" && mkdir -p logs && (./scripts/update_repo.sh >> logs/cron_update.log 2>&1 || true) && set -a && source ./.env && set +a && ./scripts/run_decode.sh --upload-data --date "$(date -u -d 'yesterday' +\%F)" >> logs/cron_decode.log 2>&1
 
 # Decode + upload current UTC day so far (12:40 UTC / 14:40 CEST)
-40 12 * * * cd "/home/palac/satnogs-pipeline" && mkdir -p logs && (./scripts/update_repo.sh >> logs/cron_update.log 2>&1 || true) && set -a && source ./.env && set +a && ./.venv/bin/python scripts/decode_meteor.py --upload-data --date "$(date -u +\%F)" >> logs/cron_decode.log 2>&1
+40 12 * * * cd "/home/palac/satnogs-pipeline" && mkdir -p logs && (./scripts/update_repo.sh >> logs/cron_update.log 2>&1 || true) && set -a && source ./.env && set +a && ./scripts/run_decode.sh --upload-data --date "$(date -u +\%F)" >> logs/cron_decode.log 2>&1
 
 # Cleanup old IQ files in SatNOGS client container
 55 0 * * * cd "/home/palac/satnogs-pipeline" && mkdir -p logs && sudo docker exec satnogs_satnogs-client sh -lc 'find /tmp/.satnogs/data -type f -mtime +1 -delete; df -h /tmp' >> logs/cron_cleanup.log 2>&1

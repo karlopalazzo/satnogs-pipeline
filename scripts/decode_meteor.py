@@ -14,8 +14,6 @@ from typing import Callable, TypeVar
 
 import requests
 
-from satnogs_pipeline.api_client import format_network_api_datetime
-
 CONTAINER_NAME = "satnogs_satnogs-client"
 CONTAINER_IQ_DIR = "/tmp/.satnogs/data"
 HOST_WORK_DIR = Path("/home/palac/satnogs-decode")
@@ -42,6 +40,10 @@ NORAD_TO_LABEL = {
 }
 
 IQ_NAME_RE = re.compile(r"^iq_cs16_(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2})\.raw$")
+
+
+def format_network_api_datetime(value: datetime) -> str:
+    return value.astimezone(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 T = TypeVar("T")
 
